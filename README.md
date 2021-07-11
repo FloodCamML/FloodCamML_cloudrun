@@ -6,8 +6,13 @@ This template includes code for deploying the application to [**Google Cloud Run
 
 The published web application is: 
 * built with R using {[shiny](https://github.com/rstudio/shiny)}
+* writing data to Google Sheets & images to Google Drive
 * containerized with [Docker](https://www.docker.com/)
 * hosted with [Google Cloud Run](https://cloud.google.com/run)
+
+## Instructions
+
+See the [**wiki**](https://github.com/FloodCamML/FloodCamML_cloudrun/wiki) for detailed instructions. The wiki will explain how to use this code template, set up the necessary Google APIs/permissions, and deploy the app to Google Cloud Run.
 
 ## Example
 
