@@ -1,3 +1,15 @@
+# Keys for Google account actions
+keys/*
+
+# Keep the folder 'keys' with only a fake file
+!keys/.gitkeep 
+
+# Any .jpg files created by shiny app
+*.jpg
+
+# shinyapps.io deployment files
+rsconnect/
+
 # History files
 .Rhistory
 .Rapp.history
