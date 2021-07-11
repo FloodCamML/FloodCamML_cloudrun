@@ -1,12 +1,14 @@
-# FloodCamMLShiny
+# FloodCamML (Google Cloud Run)
 
-This repository houses the code for the [COPE COMET](https://copecomet.github.io/index.html) "sunny-day" flooding shiny application, the NC12 Flood CamML (pronounced "CAMEL" :camel:). 
+This repository houses a template for a web application that uses a machine learning model to classify webcam images for flooding and collect additional training images and labels from users. 
+
+This template includes code for deploying the application to [**Google Cloud Run**](https://cloud.google.com/run) and is based off the [COPE COMET](https://copecomet.github.io/index.html) "sunny-day" flooding shiny application, the [NC12 Flood CamML](https://github.com/FloodCamML/NC12-FloodCamML) (pronounced "CAMEL" :camel:). 
 
 The published web application is: 
 * built with R using {[shiny](https://github.com/rstudio/shiny)}
 * containerized with [Docker](https://www.docker.com/)
 * hosted with [Google Cloud Run](https://cloud.google.com/run)
-* accessible at [https://floodcamml.org/](https://floodcamml.org/)
+* example hosted at [https://floodcamml.org/](https://floodcamml.org/)
 
 ## About the CamML Project
 
