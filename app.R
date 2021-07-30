@@ -4,6 +4,7 @@ library(lubridate)
 library(shiny)
 library(markdown)
 library(shinydashboard)
+library(shinyjs)
 library(waiter)
 library(magick)
 library(shinyalert)
@@ -14,24 +15,27 @@ library(httr)
 library(shinyWidgets)
 library(googledrive)
 library(googlesheets4)
-library(keras)
 library(purrr)
-library(noaaoceans)
 library(jsonlite)
 library(readr)
+
+#------------- Read in info ----------------
+project_info <- readr::read_csv("./ui/project_info.csv") 
+camera_info <- readr::read_csv("./ui/camera_info.csv") %>% 
+  filter(use == T)
+badges_info = NULL
 
 
 ####  Google Auth  ####
 
 # Keys for Google Auth
-source("./keys/google_keys.R") # publishing
+source("./keys/google_keys.R") 
 
 # load google authentications
 folder_ID <- Sys.getenv("GOOGLE_FOLDER_ID")
 sheets_ID <- Sys.getenv("GOOGLE_SHEET_ID")
 
 googledrive::drive_auth(path = "./keys/google_key.json")
-# googledrive::drive_auth(path = google_key_path)
 googlesheets4::gs4_auth(token = googledrive::drive_token())
 
 # Create temp directory for storing pictures
@@ -40,28 +44,30 @@ tmp_dir <- tempdir()
 #------- camera list --------------------
 
 # Lat and Long aren't currently in use but exist in the csv for later mapping
-# Filter by 'use' column so users can include other sites later
-camera_info <- readr::read_csv("./camera_info.csv") %>% 
-  filter(use == T)
-
 # Create layout info for UI
+
 panel_data <- tibble("panels" = 1:length(camera_info$camera_name)) %>% 
   mutate("rows" = ceiling(panels/2),
          "position" = c(0, abs(diff(rows)-1)))
 
+button_classes <- project_info %>% filter(variable == "button_classes") %>% pull(value) %>% stringr::str_split(.,pattern=",") %>% unlist()
+
 ## 1. Load Model ---------------------------------------------------------------------
+use_model <- project_info %>% filter(variable == "use_model") %>% pull(value) %>% as.logical()
 
-# Path to model within Github folder
-
+if(use_model){
 # Best model. 4 class classification model
-model <- keras::load_model_tf("./models/Rmodel_6_23_2021")
+  library(keras)
+  badges_info <- readr::read_csv("./ui/badges.csv") 
+  model <- keras::load_model_tf(paste0("./models/",project_info %>% filter(variable == "model") %>% pull(value)))
+}
 
 ## 2. Functions to load NCDOT Images ---------------------------------------------------------------------
 
 get_traffic_cam <- function(camera_name){
   
   URL <- camera_info$url[camera_info$camera_name == camera_name] 
-    
+  
   # retrieve the image
   pic <- magick::image_read(URL)
   time <-  Sys.time() %>% lubridate::with_tz("UTC")
@@ -83,34 +89,6 @@ write_traffic_cam <- function(camera_name, cam_time) {
     name =  paste0(camera_name, "_", cam_time, ".jpg")
   ))
 }
-
-get_tides <- function(location) {
-  
-  station_id <- switch(
-    EXPR = location,
-    "Oregon Inlet Marina" = '8652587',
-    "USCG Hatteras"       = '8654467')
-  
-  df <- noaaoceans::query_coops_data(
-    station_id = station_id,
-    start_date = format(lubridate::with_tz(Sys.time(), "America/New_York") %>% as.Date()-1, "%Y%m%d"),
-    end_date = format(lubridate::with_tz(Sys.time(), "America/New_York") %>% as.Date()+1, "%Y%m%d"),
-    data_product = 'predictions',
-    units = "english",  # feet
-    time_zone = "lst_ldt",
-    interval = 'hilo',
-    datum = 'MLLW')  # alternatively, 'MHW'
-  
-  df <- df %>%
-    mutate(t = lubridate::ymd_hm(t) %>% lubridate::force_tz(tzone="America/New_York"),
-           v = round(as.numeric(v), digits = 2)) %>%
-    dplyr::select(-station)
-  
-  colnames(df) <- c("Time","Predicted tide (ft MLLW)", "Type")
-  
-  return(df)
-}
-
 
 ## 3. Functions to classify Images ---------------------------------------------------------------------
 
@@ -134,55 +112,86 @@ standardize <- function(img) {
   return(img)
 }
 
+# Function to Apply to Each Camera
+get_cam <- function(cam_name){
+  get_traffic_cam(cam_name)
+}
 
-predict_flooding <- function(camera_name){
-  
-  
-  # Reshape to correct dimensions (1, 224, 224, 3)
-  img_array <- keras::image_load(paste0(tmp_dir,"/",camera_name,'.jpg'),
-                                 target_size = c(224,224)) %>% 
-    keras::image_to_array() %>% 
-    standardize() %>%
-    keras::array_reshape(., c(1, dim(.)))
-  
-  # Model prediction. I think it outputs it as a list, so could convert with a simple "as.numeric()" or "c()"
-  prediction <- model %>% 
-    predict(x = img_array) %>% 
-    t()
-  
-  colnames(prediction) <- "prob"
-  
-  prediction <- prediction %>% 
-    as_tibble() %>% 
-    transmute(prob = round(prob, 2),
-           label = c("Bad Image","No Flooding", "Not Sure", "Flooding")) %>% 
-    filter(prob == max(prob, na.rm=T)) %>% 
-    slice(1)
+time_reactive_list <- reactiveValues()
+
+walk(.x = camera_info$camera_name, .f = function(.x){
+  time_reactive_list[[paste0(tolower(.x),"_time_reactive")]] <- get_cam(.x)
+})
+
+if(use_model){
+  predict_model <- function(camera_name){
     
-  prediction
+    # Reshape to correct dimensions (1, 224, 224, 3)
+    img_array <- keras::image_load(paste0(tmp_dir,"/",camera_name,'.jpg'),
+                                   target_size = c(224,224)) %>% 
+      keras::image_to_array() %>% 
+      standardize() %>%
+      keras::array_reshape(., c(1, dim(.)))
+    
+    # Model prediction
+    prediction <- model %>% 
+      predict(x = img_array) %>% 
+      t()
+    
+    colnames(prediction) <- "prob"
+    
+    prediction <- prediction %>% 
+      as_tibble() %>% 
+      transmute(prob = round(prob, 2),
+                label = project_info %>% filter(variable == "model_classes") %>% pull(value) %>% stringr::str_split(.,pattern=",") %>% unlist()) %>% 
+      filter(prob == max(prob, na.rm=T)) %>% 
+      slice(1)
+    
+    prediction
+  }
+  
+  get_prediction <-  function(cam_name){
+    predict_model(cam_name)
+  }
+  
+  predict_reactive_list <- reactiveValues()
+  
+  walk(.x = camera_info$camera_name, .f = function(.x){
+    predict_reactive_list[[paste0(tolower(.x),"_predict_reactive")]] <- get_prediction(.x)
+    
+  })
 }
 
 waiting_screen <- tagList(
   spin_wave(),
-  h4("Loading Flood CamML")
+  h4(paste0("Loading ", project_info %>% filter(variable == "title") %>% pull(value)))
 )
+
+# some javascript to make sidebar automatically go away after hitting tab name while on mobile
+
+jsCode <- "shinyjs.init = function() {
+  $(document).on('shiny:sessioninitialized', function (e) {
+  var mobile = window.matchMedia('only screen and (max-width: 768px)').matches;
+  Shiny.onInputChange('is_mobile_device', mobile);
+});
+}"
 
 ####____________________________________####
 #------------------------ Define UI ---------------------------------------
 ui <- dashboardPage(
-  title = "NC12 Flood CamML", 
+  title = project_info %>% filter(variable == "title") %>% pull(value), 
   skin = "black",
   
   
   #####  Header  ####
   header = dashboardHeader(
-    title =  p("NC12 Flood CamML", style="color:white;"),
+    title =  p(project_info %>% filter(variable == "title") %>% pull(value), style="color:white;"),
     titleWidth = 350,
     tags$li(class = "dropdown", 
             actionButton(inputId = "submit", label = "SUBMIT ASSESSMENT", class = "btn btn-success", style="color:white;font-size:12pt,font-weight:bold;"),
             style="margin:8px 20px 8px 0px;"
-            )
-),
+    )
+  ),
   
   
   #####  Sidebar  ####
@@ -207,10 +216,14 @@ ui <- dashboardPage(
       ), 
       
       
-      # ------------ _About Flood CamML -----------
+      # ------------ _About the project -----------
       menuItem("About the Project", tabName = "About", icon = icon("info-circle")),
-      menuItem("The Model", tabName = "Model", icon = icon("robot")),
+      
+      if(use_model){
+        menuItem("The Model", tabName = "Model", icon = icon("robot"))
+      },
       menuItem("Contact Us", tabName = "Contact", icon = icon("envelope"))
+      
     )
   ),
   
@@ -231,11 +244,13 @@ ui <- dashboardPage(
         size = 24,
         css = ""),
       shinyjs::useShinyjs(),
+      extendShinyjs(text = jsCode, functions = c()),
       useShinyalert(),
       use_waiter(),
+      # waiter::waiter_show_on_load(html = waiting_screen, color = "#222d32"),
       waiter::waiter_preloader(html = waiting_screen, color = "#222d32"),
       tags$head(
-        tags$link(rel = "shortcut icon", href = "https://raw.githubusercontent.com/FloodCamML/FloodCamMLShiny/cloud-run/pics/camel.png"),
+        tags$link(rel = "shortcut icon", href = project_info %>% filter(variable == "logo_url") %>% pull(value)),
         tags$style(HTML('
         .skin-black .main-header .logo {
           background-color: #000000;
@@ -259,10 +274,6 @@ ui <- dashboardPage(
           background: #000;
         }
         
-        # .main-header .sidebar-toggle {
-        #   font-weight: 200; 
-        # }
-                                
         .nav-tabs-custom .nav-tabs li.active {
           border-top-color: black;
         }
@@ -306,6 +317,22 @@ ui <- dashboardPage(
             color: white;
             border-left: 3px solid transparent;
         }
+        
+        .badge {
+          font-size:14px;
+        }
+
+        .footer-div-body {
+            position:relative;
+            bottom:0;
+            right:0;
+            left:0;
+            background:#ecf0f5;
+            padding:10px;
+            z-index: 1000; 
+            text-align:center;
+        }
+        
 
       '))),
       
@@ -316,56 +343,28 @@ ui <- dashboardPage(
         ###### Model ####
         tabItem(tabName = "Cameras",
                 fluidRow(
+                  div(
+                    style = "background-color: #ffffff;
+                    border-radius: 10px;
+                    margin: 0 15px;
+                    overflow-y: auto;
+                    display: inline-block;",
+                    align = "center",
                   ######_ Prediction Key  ####
-                  column(width=6,
-                         div(
-                           style="background-color: #ffffff;
-                      padding: 10px;
-                      height: 225px;
-                      border-radius: 10px;
-                      margin: 10px 0;
-                      overflow-y: auto;
-                      display: inline-block;
-                      width:100%;",
-                           # height=300,
-                           align  = "center",
-                           h3("Flood detection using machine learning"),
-                           p("Our model makes the following predictions for each image:",
-                             style="text-align:center;"),
-                           p(tippy::tippy(span(class="badge","Flooding",style="background-color:#dd4b39;"),h5("Road appears to be flooded")),
-                             ", ",
-                             tippy::tippy(span(class="badge","Not Sure",style="background-color:#f39c12;"),h5("Can't tell if the road is flooded or not")),
-                             ", ",
-                             tippy::tippy(span(class="badge","No Flooding",style="background-color:#00a65a;"),h5("Road appears to not be flooded")),
-                             ", or ",
-                             tippy::tippy(span(class="badge","Bad Image",style="background-color:#787878;"),h5("The image is dark, bad weather, camera is not working, rain on the camera lens, etc.")),
-                             style="text-align:center;"),
-                          p("But are these roadway predictions correct? Help us improve our model by telling us what you see using the buttons below each image: then click", strong("submit"), " in the upper right. See ",actionLink("to_about_section", "About the Project"), " for more details or hover over the classifications above.", style="text-align:center;")                         )
-                  ),
-                  column(width=6,
-                         ######_ Latest Conditions  ####
-                         div(style="background-color: #ffffff;
-                      padding: 10px;
-                      border-radius: 10px;
-                      height: 225px;
-                      margin: 10px 0;
-                      overflow-y: auto;
-                      display: inline-block;
-                      width:100%;",
-                             align  = "left",
-                             span(h3("Local Tides"),align="center"),
-                             uiOutput("tide_label"),
-                             br(),
-                             radioButtons(inputId =  "latest_tides_location",
-                                          label = "Gauge Location",
-                                          inline = T,
-                                          choices = c("Oregon Inlet Marina",
-                                                      "USCG Hatteras"),
-                                          selected = "Oregon Inlet Marina")
-
-                         )
+                        column(width=6,
+                               
+                           h2(project_info %>% filter(variable == "subtitle") %>% pull(value)),
+                           h5(project_info %>% filter(variable == "subtitle_description") %>% pull(value)),
+                           uiOutput(outputId = "badges"),
+                           br()
+                        ),
+                    column(width=6,
+                           div(style="padding-top:25px",
+                           uiOutput(outputId = "description")
+                           )
+                           )
                   )
-                ),
+                  ),
                 
                 
                 ######_ Cams  ####
@@ -380,7 +379,6 @@ ui <- dashboardPage(
                   div(
                     style = "background-color: #ffffff;
                       padding: 10px;
-                      
                       border-radius: 10px;
                       margin: 10px 0;
                       overflow-y: auto;
@@ -393,7 +391,7 @@ ui <- dashboardPage(
                 ))
         ),
         tabItem(tabName = "Model",
-
+                
                 fluidRow(column(
                   width = 12,
                   div(
@@ -410,9 +408,10 @@ ui <- dashboardPage(
                     includeMarkdown("text/about_ML.md")
                   )
                 ))
-    ),
-    tabItem(tabName = "Contact",
+        ),
 
+        tabItem(tabName = "Contact",
+                
                 fluidRow(column(
                   width = 12,
                   div(
@@ -428,9 +427,12 @@ ui <- dashboardPage(
                     includeMarkdown("text/contact_us.md")
                   )
                 ))
-    )
-  )
-)))
+        )
+      ),
+      div(class = "footer-div-body",
+          span(style="text-align:center;",p(paste0("Copyright © ",format(Sys.Date(), "%Y")," ",project_info %>% filter(variable == "organization") %>% pull(value),". Built with"), style= "color:black;display:inline;"),a("CamML", href = "https://floodcamml.github.io", style="color:#007eff;"))
+      )
+    )))
 
 
 
@@ -457,6 +459,24 @@ server <- function(input, output, session) {
              size = "s",
              inputId = "splash_page", 
              closeOnEsc = T)
+  
+  #---------------- badges render --------------------
+  output$badges <- renderUI({
+    req(badges_info)
+    
+    badge_pieces <- c()
+    
+    for(i in 1:nrow(badges_info)){
+      badge_pieces[[i]] <- tippy::tippy(shiny::span(class="badge",badges_info$value[i],style=paste0("background-color:",badges_info$color[i],";")),shiny::h5(badges_info$description[i]))
+    }
+    
+    h4(badge_pieces)
+  })
+  
+  #---------------- description render ---------------
+  output$description <- renderUI({
+    HTML(project_info %>% filter(variable == "description") %>% pull(value)) 
+  })
   
   #---------------- picture panel render ---------------
   output$picture_panel <- renderUI({
@@ -497,67 +517,20 @@ server <- function(input, output, session) {
     
   })
   
-  
-  #-------------------- Get local data ---------------
-  w_latest_conditions <- Waiter$new(id = "tide_label",
-                                    html = spin_3k(),
-                                    color = transparent(.75))
-  
-  
-  
-  tides <- reactive({
-   get_tides(input$latest_tides_location)
-  }) %>% 
-    bindCache(input$latest_tides_location)
-  
-  observeEvent(input$latest_tides_location,{
-    w_latest_conditions$show()
-    
-    last_tide <- tides() %>% 
-      # filter(as.Date(Time) == lubridate::with_tz(Sys.time(), "America/New_York") %>% as.Date()) %>% 
-      filter(Time <= lubridate::with_tz(Sys.time(), "America/New_York")) %>% 
-      arrange(rev(Time)) %>% 
-      slice(1) 
-    
-    next_tide <- tides() %>% 
-      # filter(as.Date(Time) == lubridate::with_tz(Sys.time(), "America/New_York") %>% as.Date()) %>% 
-      filter(Time > lubridate::with_tz(Sys.time(), "America/New_York")) %>% 
-      arrange(Time) %>% 
-      slice(1) 
-    
-    
-    output$tide_label <- renderUI({
-      last_tide_label <-last_tide %>% 
-        mutate(date = format(Time, "%m/%d/%Y"),
-               sys_date = lubridate::with_tz(Sys.time(), "America/New_York") %>% format(., "%m/%d/%Y")) %>% 
-        mutate(Time = ifelse(date == sys_date, paste0("Today at ", format(Time, "%I:%M %p")), ifelse(date > sys_date, paste0("Tomorrow at ", format(Time, "%I:%M %p")), paste0("Yesterday at ", format(Time, "%I:%M %p"))))) %>% 
-        mutate(Type = ifelse(Type == "H", "High", "Low")) %>% 
-        dplyr::select(-c(date, sys_date))
-      
-      next_tide_label <- next_tide %>% 
-        mutate(date = format(Time, "%m/%d/%Y"),
-               sys_date = lubridate::with_tz(Sys.time(), "America/New_York") %>% format(., "%m/%d/%Y")) %>% 
-        mutate(Time = ifelse(date == sys_date, paste0("Today at ", format(Time, "%I:%M %p")), ifelse(date > sys_date, paste0("Tomorrow at ", format(Time, "%I:%M %p")), paste0("Yesterday at ", format(Time, "%I:%M %p"))))) %>% 
-        mutate(Type = ifelse(Type == "H", "High", "Low")) %>% 
-        dplyr::select(-c(date, sys_date))
-      
-      div(
-        span(h5("Last tide:",strong(last_tide_label$Time),paste0("(",last_tide_label$Type,": ",last_tide_label$`Predicted tide (ft MLLW)`," ft MLLW",")"))),
-        span(h5("Next tide:",strong(next_tide_label$Time),paste0("(",next_tide_label$Type,": ",next_tide_label$`Predicted tide (ft MLLW)`," ft MLLW",")")))   
-      )
-    })
-  })
+  observeEvent(input$nav,
+               {
+                 req(input$is_mobile_device == T)
+                 # for desktop browsers
+                 addClass(selector = "body", class = "sidebar-collapse")
+                 # for mobile browsers
+                 removeClass(selector = "body", class = "sidebar-open")
+               })
   
   #-------------- Reactive Value Holders -------------
   # These capture user inputs for later
   
   # feedback on model 1
-  button_info_model1 <- reactiveValues(
-    # mirlo_button_info = NULL, 
-    #                                    northdock_button_info = NULL,
-    #                                    southdock_button_info = NULL,
-    #                                    southocracoke_button_info = NULL
-    )
+  button_info_model1 <- reactiveValues()
   
   
   ####____________________________####
@@ -565,39 +538,18 @@ server <- function(input, output, session) {
   
   #--------------- Get Cam Images ----------------------
   
-  
+
   # Get Traffic Cam Images
-  
-  # Function to Apply to Each Camera
-  get_cam <- function(cam_name){
-    reactive({
-      invalidateLater(millis = 5*60*1000, session = session)
-      get_traffic_cam(cam_name)
-    })
-  }
-  
-  # Run Each Camera
-  time_reactive_list <- reactiveValues()
-  
+
   walk(.x = camera_info$camera_name, .f = function(.x){
     time_reactive_list[[paste0(tolower(.x),"_time_reactive")]] <- get_cam(.x)
   })
   
-  
-  #--------------- Model Results ----------------------
-  get_prediction <-  function(cam_name){
-    reactive({
-      invalidateLater(millis = 5*60*1000, session = session)
-      predict_flooding(cam_name)
+  if(use_model){
+    walk(.x = camera_info$camera_name, .f = function(.x){
+      predict_reactive_list[[paste0(tolower(.x),"_predict_reactive")]] <- get_prediction(.x)
     })
   }
-  
-  predict_reactive_list <- reactiveValues()
-  
-  walk(.x = camera_info$camera_name, .f = function(.x){
-    predict_reactive_list[[paste0(tolower(.x),"_predict_reactive")]] <- get_prediction(.x)
-  })
-
   
   #--------------- Display Camera Feeds ----------------------
   
@@ -629,13 +581,13 @@ server <- function(input, output, session) {
   
   # Function to apply to each
   # takes the camera name, the reactive time, and the model predictions
-  render_camera_ui <- function(cam_name, cam_time, model_prediction, id_suffix = ""){
-    model_predict_info <- model_prediction()
+  render_camera_ui_model <- function(cam_name, cam_time, model_prediction, tzone = project_info %>% filter(variable == "tzone") %>% pull(value), tzone_alias = project_info %>% filter(variable == "tzone_alias") %>% pull(value),id_suffix = ""){
+    model_predict_info <- model_prediction
     
     model_prediction_val <- model_predict_info$prob * 100
     model_prediction_class <- model_predict_info$label
-    cam_time_val <- cam_time()
-    lst_time <- format(cam_time_val %>% lubridate::with_tz("America/New_York"), "%m/%d/%Y %H:%M")
+    cam_time_val <- cam_time
+    lst_time <- format(cam_time_val %>% lubridate::with_tz(tzone), "%m/%d/%Y %H:%M")
     
     # string prep for naming patterns for UI elements
     # option to add suffix for "_unsupervised" ui elements
@@ -650,21 +602,20 @@ server <- function(input, output, session) {
             padding: 10px;
             border-radius: 10px;
             margin: 10px 0px;",
-          # height=300,
           align  = "center",
           div(style="display:inline-block",
               h2(gsub("([a-z])([A-Z])", "\\1 \\2", cam_name))),
           div(style="display:inline-block",
               
-              switch(
-                EXPR = model_prediction_class,
-                "Flooding" = span(class="badge","Flooding",style="background-color:#dd4b39;position: relative; bottom: 5px; color:white;"),
-                "Not Sure" = span(class="badge","Not Sure",style="background-color:#f39c12;position: relative; bottom: 5px; color:white;"),
-                "No Flooding" = span(class="badge","No Flooding",style="background-color:#00a65a;position: relative;bottom: 5px;color:white;"),
-                "Bad Image" = span(class="badge","Bad Image",style="background-color:#787878;position: relative;bottom: 5px;color:white;")
-              )
-                
-      ),
+              # Edit Badges above pictures created using model output
+              span(class="badge",badges_info %>% 
+                     filter(value == model_prediction_class) %>% 
+                     pull(value),
+                   style=paste0("background-color:",badges_info %>% 
+                                  filter(value == model_prediction_class) %>% 
+                                  pull(color),";position: relative; bottom: 5px; color:white;"))
+
+          ),
           
           # Display Cam Image
           imageOutput(img_output_id,
@@ -672,20 +623,20 @@ server <- function(input, output, session) {
           
           # Datetime for image
           p(paste0("ML probability of ", model_prediction_class,": ", model_prediction_val,"%")),
-          p(paste0("Time: ", lst_time, " EDT/EST")),
+          p(paste0("Time: ", lst_time," ", tzone_alias)),
           
           # Inline boxes for user feedback
           div(style="display:inline-block",
-
+              
+              # Edit choiceNames and choiceValues for buttons under pictures for labelling
               shinyWidgets::radioGroupButtons(inputId = radio_button_id,
-                                              choiceNames = c("Flood", "Not Sure", "No Flood","Bad Image"),
-                                              choiceValues = c("Flood", "Not Sure", "No Flood","Bad Image"),
+                                              choiceNames = button_classes,
+                                              choiceValues = button_classes,
                                               direction = "horizontal",
                                               width = '100%' ,
                                               individual = F,
                                               selected = character(0)
-                                              # checkIcon = list(yes = icon("ok",lib="glyphicon"))
-                                              )
+              )
           ),
           
           # clear selection button
@@ -703,16 +654,86 @@ server <- function(input, output, session) {
     return(camera_button_ui)
   }
   
-  
-  observe({
-    walk(.x = camera_info$camera_name, .f = function(.x){
-      output[[paste0(tolower(.x), "_selection")]] <- render_camera_ui(
-        cam_name = .x,
-        cam_time = time_reactive_list[[paste0(tolower(.x), "_time_reactive")]],
-        model_prediction = predict_reactive_list[[paste0(tolower(.x), "_predict_reactive")]]
+  render_camera_ui_no_model <- function(cam_name, cam_time, tzone = project_info %>% filter(variable == "tzone") %>% pull(value), tzone_alias = project_info %>% filter(variable == "tzone_alias") %>% pull(value),id_suffix = ""){
+
+    cam_time_val <- cam_time
+    lst_time <- format(cam_time_val %>% lubridate::with_tz(tzone), "%m/%d/%Y %H:%M")
+    
+    # string prep for naming patterns for UI elements
+    # option to add suffix for "_unsupervised" ui elements
+    name_lcase <- tolower(cam_name)
+    img_output_id <- str_c(name_lcase, "_picture", id_suffix)
+    radio_button_id <- str_c(name_lcase, "_button_select", id_suffix)
+    button_clear <- str_c(name_lcase, "_clear", id_suffix)
+    
+    camera_button_ui <- renderUI({
+      div(width="100%",
+          style="background-color: #ffffff;
+            padding: 10px;
+            border-radius: 10px;
+            margin: 10px 0px;",
+          align  = "center",
+          div(style="display:inline-block",
+              h2(gsub("([a-z])([A-Z])", "\\1 \\2", cam_name))),
+
+          # Display Cam Image
+          imageOutput(img_output_id,
+                      height="100%"),
+          
+          # Datetime for image
+          p(paste0("Time: ", lst_time," ", tzone_alias)),
+          
+          # Inline boxes for user feedback
+          div(style="display:inline-block",
+              
+              # Edit choiceNames and choiceValues for buttons under pictures for labelling
+              shinyWidgets::radioGroupButtons(inputId = radio_button_id,
+                                              choiceNames = button_classes,
+                                              choiceValues = button_classes,
+                                              direction = "horizontal",
+                                              width = '100%' ,
+                                              individual = F,
+                                              selected = character(0)
+              )
+          ),
+          
+          # clear selection button
+          div(style="display:inline-block",
+              actionButton(inputId = button_clear,
+                           label = "Clear",
+                           class = "btn btn-primary",
+                           style = "font-size:10pt;color:white")
+          )
       )
+      
     })
-  })
+    
+    #return the UI
+    return(camera_button_ui)
+  }
+  
+  if(use_model){
+    observe({
+      walk(.x = camera_info$camera_name, .f = function(.x){
+        output[[paste0(tolower(.x), "_selection")]] <- render_camera_ui_model(
+          cam_name = .x,
+          cam_time = time_reactive_list[[paste0(tolower(.x), "_time_reactive")]],
+          model_prediction = predict_reactive_list[[paste0(tolower(.x), "_predict_reactive")]]
+        )
+      })
+    })
+  }
+  
+  if(!use_model){
+    observe({
+      walk(.x = camera_info$camera_name, .f = function(.x){
+        output[[paste0(tolower(.x), "_selection")]] <- render_camera_ui_no_model(
+          cam_name = .x,
+          cam_time = time_reactive_list[[paste0(tolower(.x), "_time_reactive")]],
+        )
+      })
+    })
+  }
   
   
   ####____________________________####
@@ -722,15 +743,16 @@ server <- function(input, output, session) {
   #------------------ Reactive reset buttons ----------------
   
   #####__ 1. Reset supervised buttons  ####
+  
+  # Edit button choiceNames and choiceValues
   walk(.x = camera_info$camera_name, .f = function(.x){
     observeEvent(input[[paste0(tolower(.x),"_clear")]],{
       updateRadioGroupButtons(session = session,
                               inputId = paste0(tolower(.x),"_button_select"),
-                              choiceNames  = c("Flood", "Not Sure", "No Flood","Bad Image"), 
-                              choiceValues = c("Flood", "Not Sure", "No Flood","Bad Image"), 
-                              selected = character(0), 
-                              # checkIcon = list(yes = icon("ok", lib = "glyphicon"))
-                              )
+                              choiceNames  = button_classes, 
+                              choiceValues = button_classes, 
+                              selected = character(0) 
+      )
     })
   })
   
@@ -743,7 +765,7 @@ server <- function(input, output, session) {
   })
   
   
-  #------------------- Submit button for model 1 -------------------
+#------------------- Submit button for model 1 -------------------
   
   # 1. Observe the user submission
   observeEvent(input$submit,{
@@ -774,14 +796,15 @@ server <- function(input, output, session) {
     req(input$shinyalert)
     
     shinyalert(
-        title = "Submitting responses...",
-        inputId = "submitting_alert",
-        showConfirmButton =F,
-        showCancelButton = F,
-        closeOnEsc = F,
-        animation = T
-      )
-
+      title = "Submitting responses...",
+      inputId = "submitting_alert",
+      showConfirmButton =F,
+      showCancelButton = F,
+      closeOnEsc = F,
+      animation = T,
+      text = "Please do not close the page or click 'Back'"
+    )
+    
     updateActionButton(session = session,
                        inputId = "submit",
                        label = "SUBMITTED!", 
@@ -794,7 +817,7 @@ server <- function(input, output, session) {
     ######  Supervised Model Feedback  ####
     
     # Function to pull relevant camera data from models and feedback
-    store_cam_data <- function(cam_name, cam_time, model_prediction, button_response){
+    store_cam_data_model <- function(cam_name, cam_time, model_prediction, button_response){
       cam_data <- tibble(
         "date"          = c(cam_time),
         "location"      = c(cam_name),
@@ -805,42 +828,70 @@ server <- function(input, output, session) {
       )
     }
     
+    store_cam_data_no_model <- function(cam_name, cam_time,  button_response){
+      cam_data <- tibble(
+        "date"          = c(cam_time),
+        "location"      = c(cam_name),
+        "filename"      = str_c(cam_name,"_",cam_time,".jpg"), 
+        "model_score"   = NA,
+        "model_class"   = NA,
+        "user_response" = ifelse(is.null(button_response), NA, button_response)
+      )
+    }
+    
     # Create reactive list to hold all of user and model data
     data_reactive_list <- reactiveValues()
     
-    walk(
-      .x = camera_info$camera_name,
-      .f = function(.x) {
-        data_reactive_list[[paste0(tolower(.x), "_data")]] <-
-          store_cam_data(
-            cam_name = .x,
-            cam_time = isolate(time_reactive_list[[paste0(tolower(.x), "_time_reactive")]]()),
-            model_prediction = isolate(predict_reactive_list[[paste0(tolower(.x), "_predict_reactive")]]()),
-            button_response = button_info_model1[[paste0(tolower(.x), "_button_info")]]
-          )
-        
-      }
-    )
+    if(use_model){
+      walk(
+        .x = camera_info$camera_name,
+        .f = function(.x) {
+          data_reactive_list[[paste0(tolower(.x), "_data")]] <-
+            store_cam_data_model(
+              cam_name = .x,
+              cam_time = time_reactive_list[[paste0(tolower(.x), "_time_reactive")]],
+              model_prediction = predict_reactive_list[[paste0(tolower(.x), "_predict_reactive")]],
+              button_response = button_info_model1[[paste0(tolower(.x), "_button_info")]]
+            )
+          
+        }
+      )
+    }
     
-
+    if(!use_model){
+      walk(
+        .x = camera_info$camera_name,
+        .f = function(.x) {
+          data_reactive_list[[paste0(tolower(.x), "_data")]] <-
+            store_cam_data_no_model(
+              cam_name = .x,
+              cam_time = time_reactive_list[[paste0(tolower(.x), "_time_reactive")]],
+              button_response = button_info_model1[[paste0(tolower(.x), "_button_info")]]
+            )
+          
+        }
+      )
+    }
+    
+    
     # Join tibbles of user and model data into one tibble
     data <- map_dfr(reactiveValuesToList(data_reactive_list), bind_rows)
     
     # Append data to google sheet
     suppressMessages(googlesheets4::sheet_append(ss = sheets_ID,
                                                  data = data))
-
+    
     # Write pictures to Google Drive
     purrr::map2(data$location, data$date, write_traffic_cam)
-
-      shinyalert(
-        inputId = "submitted_alert",
-        title = "Submitted!",
-        type = "success",
-        immediate = T,
-        animation = T,
-        text = "Thanks for helping make the NC12 Flood CamML smarter!"
-      )
+    
+    shinyalert(
+      inputId = "submitted_alert",
+      title = "Submitted!",
+      type = "success",
+      immediate = T,
+      animation = T,
+      text = project_info %>% filter(variable == "submit_success") %>% pull(value)
+    )
   })
   
 }
