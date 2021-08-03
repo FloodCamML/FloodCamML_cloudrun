@@ -12,11 +12,11 @@ The published web application is:
 
 ## Instructions
 
-See the [**wiki**](https://github.com/FloodCamML/FloodCamML_cloudrun/wiki) for detailed instructions. The wiki will explain how to use this code template, set up the necessary Google APIs/permissions, and deploy the app to Google Cloud Run.
+See the [Flood CamML website](https://floodcamml.org/docs/intro) for detailed instructions. The tutorial will explain how to use this code template, set up the necessary Google APIs/permissions, and deploy the app to Google Cloud Run.
 
 ## Example
 
-An example (NC-12 Flood CamML) is available at [floodcamml.org](https://floodcamml.org/)
+An example (NC-12 Flood CamML) is available at [nc12.floodcamml.org](https://nc12.floodcamml.org/)
 
 ## Other deployment options
 
@@ -24,5 +24,5 @@ Code for deploying the application to [shinyapps.io](https://www.shinyapps.io/) 
 
 ## About the CamML Project
 
-CamML is an open source project for crowd labeling and ML prediction of real-time webcam imagery. See the full project description in the [NC-12 FloodCamML repo](https://github.com/FloodCamML/NC12-FloodCamML#nc-12-floodcamml).
+CamML is an open source project for crowd labeling and ML prediction of real-time webcam imagery. See the full project description at [floodcamml.org](https://floodcamml.org/).
 
