@@ -3,7 +3,7 @@ library(dplyr)
 library(lubridate)
 library(shiny)
 library(markdown)
-library(shinydashboard)
+library(bs4Dash)
 library(shinyjs)
 library(waiter)
 library(magick)
@@ -53,10 +53,10 @@ panel_data <- tibble("panels" = 1:length(camera_info$camera_name)) %>%
 button_classes <- project_info %>% filter(variable == "button_classes") %>% pull(value) %>% stringr::str_split(.,pattern=",") %>% unlist()
 
 ## 1. Load Model ---------------------------------------------------------------------
-use_model <- project_info %>% filter(variable == "use_model") %>% pull(value) %>% as.logical()
+use_model <- F #project_info %>% filter(variable == "use_model") %>% pull(value) %>% as.logical()
 
 if(use_model){
-# Best model. 4 class classification model
+  # Best model. 4 class classification model
   library(keras)
   badges_info <- readr::read_csv("./ui/badges.csv") 
   model <- keras::load_model_tf(paste0("./models/",project_info %>% filter(variable == "model") %>% pull(value)))
@@ -176,66 +176,54 @@ jsCode <- "shinyjs.init = function() {
 });
 }"
 
-####____________________________________####
-#------------------------ Define UI ---------------------------------------
-ui <- dashboardPage(
-  title = project_info %>% filter(variable == "title") %>% pull(value), 
-  skin = "black",
+#------------------ UI definition ---------------------
+ui <- bs4Dash::dashboardPage(
   
+  # Title within browser tab
+  title = project_info %>% filter(variable == "title") %>% pull(value),
   
-  #####  Header  ####
-  header = dashboardHeader(
-    title =  p(project_info %>% filter(variable == "title") %>% pull(value), style="color:white;"),
-    titleWidth = 350,
-    tags$li(class = "dropdown", 
-            actionButton(inputId = "submit", label = "SUBMIT ASSESSMENT", class = "btn btn-success", style="color:white;font-size:12pt,font-weight:bold;"),
-            style="margin:8px 20px 8px 0px;"
+  # Title within top navbar
+  header = bs4Dash::dashboardHeader(
+    border = F,
+    fixed = T,
+    .list = list(
+      span(p(project_info %>% filter(variable == "title") %>% pull(value), style = "color:white;display:inline;font-size:1rem;"))
     )
   ),
   
+  # Submit button in a fixed footer
+  footer = dashboardFooter(fixed = T, 
+                           left = actionButton(inputId = "submit", label = "SUBMIT", status = "success", style = "width:250px")),
   
   #####  Sidebar  ####
   sidebar = dashboardSidebar(
-    width = 350,
+    skin = "light",
+    status = "primary",
+    elevation = 2,
+    fixed = T,
     sidebarMenu(
       id = "nav",
       
-      #####_ Models  ####
+      # Menu tabs within sidebar. Model tab is shown if use_model = T as declared in project_info.csv
       menuItem("Cameras", tabName = "Cameras", icon = icon("camera-retro")),
-      
-      conditionalPanel(
-        condition = "input.nav === 'Cameras'",
-        div(style= "border-left-style: solid; 
-                    border-left-width: medium; 
-                    border-left-color: white;
-                    overflow-wrap: anywhere;
-                    padding: 1px 20px;",
-            includeMarkdown("./text/cameras.md"),
-            br()
-        )
-      ), 
-      
-      
-      # ------------ _About the project -----------
       menuItem("About the Project", tabName = "About", icon = icon("info-circle")),
-      
       if(use_model){
         menuItem("The Model", tabName = "Model", icon = icon("robot"))
       },
       menuItem("Contact Us", tabName = "Contact", icon = icon("envelope"))
-      
     )
   ),
   
   #####  Dashboard Body  ####
   dashboardBody(
-    tags$script(HTML("$('body').addClass('fixed');")),
     fluidPage(
+      
+      # Message dispalyed on screen when app times out (or errors)
       disconnectMessage(
         text = "Your session has timed out! Try refreshing the page.",
         refresh = "Refresh",
         background = "#FFFFFF",
-        colour = "#000000",##000000
+        colour = "#000000",
         refreshColour = "#337AB7",
         overlayColour = "#000000",
         overlayOpacity = 0.25,
@@ -247,202 +235,94 @@ ui <- dashboardPage(
       extendShinyjs(text = jsCode, functions = c()),
       useShinyalert(),
       use_waiter(),
-      # waiter::waiter_show_on_load(html = waiting_screen, color = "#222d32"),
       waiter::waiter_preloader(html = waiting_screen, color = "#222d32"),
+      
+      # Adds logo (via the url in project_info.csv) to the browser tab. Loads style rules from .css
       tags$head(
         tags$link(rel = "shortcut icon", href = project_info %>% filter(variable == "logo_url") %>% pull(value)),
-        tags$style(HTML('
-        .skin-black .main-header .logo {
-          background-color: #000000;
-          border-right: 1px solid #000000;
-        }
-        .skin-black .main-header .logo:hover {
-          background-color: #000000;
-        }
-        
-        .skin-black .main-header .navbar {
-          background-color: #000000;
-        }
-        
-        .skin-black .main-header .navbar>.sidebar-toggle {
-          color: #FFFFFF;
-          border-right: 1px solid #000000;
-        }
-        
-        .skin-black .main-header .navbar .sidebar-toggle:hover {
-          color: #fff;
-          background: #000;
-        }
-        
-        .nav-tabs-custom .nav-tabs li.active {
-          border-top-color: black;
-        }
-        
-        .main-sidebar .user-panel, .sidebar-menu, .sidebar-menu>li.header {
-          white-space: normal;
-          overflow: hidden;
-        }
-        
-        .content {
-          padding: 5px;
-        }
-        
-        body.skin-black.fixed {
-          overflow-y: auto;
-        }
-
-        a {
-        color: #5dbeff;
-          font-weight: bold;
-        }
-
-        a:hover {
-        color: #5dbeff;
-            text-decoration: underline;
-        }
-
-        .skin-black .sidebar a {
-          font-weight: bold;
-          color:#5dbeff;
-        }
-
-        .skin-black .sidebar a:hover {
-          font-weight: bold;
-          color:#5dbeff;
-          text-decoration: underline;
-
-        }
-
-        .skin-black .sidebar-menu>li>a {
-            color: white;
-            border-left: 3px solid transparent;
-        }
-        
-        .badge {
-          font-size:14px;
-        }
-
-        .footer-div-body {
-            position:relative;
-            bottom:0;
-            right:0;
-            left:0;
-            background:#ecf0f5;
-            padding:10px;
-            z-index: 1000; 
-            text-align:center;
-        }
-        
-
-      '))),
+        includeCSS("flood-camml.css")
+      ),
       
       ##### Tab Items  ####
       tabItems(
         
-        
-        ###### Model ####
+        #-------------- Camera tab ---------------------------
         tabItem(tabName = "Cameras",
+                
+                # First row shows subtitle, subtitle_description, and (if using a model) the badges. Info in project_info.csv and badges.csv
                 fluidRow(
-                  div(
-                    style = "background-color: #ffffff;
-                    border-radius: 10px;
-                    margin: 0 15px;
-                    overflow-y: auto;
-                    display: inline-block;",
-                    align = "center",
-                  ######_ Prediction Key  ####
-                        column(width=6,
-                               
-                           h2(project_info %>% filter(variable == "subtitle") %>% pull(value)),
-                           h5(project_info %>% filter(variable == "subtitle_description") %>% pull(value)),
-                           uiOutput(outputId = "badges"),
-                           br()
-                        ),
-                    column(width=6,
-                           div(style="padding-top:25px",
-                           uiOutput(outputId = "description")
-                           )
-                           )
+                  column(width=12,style="padding-left:7.5px;padding-right:7.5px;",
+                         div(class="card",
+                             div(class = "card-body",
+                                 fluidRow(style= "align-content: center; align-items: center;",
+                                          column(width=6,
+                                                 h3(project_info %>% filter(variable == "subtitle") %>% pull(value)),
+                                                 h5(project_info %>% filter(variable == "subtitle_description") %>% pull(value)),
+                                                 uiOutput(outputId = "badges")
+                                          ),
+                                          column(width=6,
+                                                 uiOutput(outputId = "description")
+                                          )
+                                 )
+                             )
+                         )
                   )
-                  ),
+                ),
                 
+                # Longform site info from text/site_info.md
+                uiOutput(outputId = "site_info"),
                 
-                ######_ Cams  ####
+                # Pictures (customize with camera_info.csv) with label buttons underneath
                 uiOutput(outputId = "picture_panel")
         ),
         
-        # ------------- About --------------
+        # -------------------- About tab ---------------------
         tabItem(tabName = "About",
-                
-                fluidRow(column(
+                column(
                   width = 12,
-                  div(
-                    style = "background-color: #ffffff;
-                      padding: 10px;
-                      border-radius: 10px;
-                      margin: 10px 0;
-                      overflow-y: auto;
-                      display: inline-block;
-                      width:100%;",
-                    # height=300,
-                    align  = "left",
-                    includeMarkdown("./text/about_project.md")
+                  div(class="card",
+                      div(class = "card-body",
+                          includeMarkdown("./text/about_project.md")
+                      )
                   )
-                ))
+                )
         ),
+        # ----------- Model tab (only shows if using model) -----------------
         tabItem(tabName = "Model",
-                
-                fluidRow(column(
+                column(
                   width = 12,
-                  div(
-                    style = "background-color: #ffffff;
-                      padding: 10px;
-                      
-                      border-radius: 10px;
-                      margin: 10px 0;
-                      overflow-y: auto;
-                      display: inline-block;
-                      width:100%;",
-                    # height=300,
-                    align  = "left",
-                    includeMarkdown("text/about_ML.md")
+                  div(class="card",
+                      div(class = "card-body",
+                          includeMarkdown("text/about_ML.md")
+                      )
                   )
-                ))
+                )
         ),
-
+        
+        # ----------- Contact tab -----------------
         tabItem(tabName = "Contact",
-                
-                fluidRow(column(
+                column(
                   width = 12,
-                  div(
-                    style = "background-color: #ffffff;
-                      padding: 10px;
-                      
-                      border-radius: 10px;
-                      margin: 10px 0;
-                      overflow-y: auto;
-                      display: inline-block;
-                      width:100%;",
-                    align  = "left",
-                    includeMarkdown("text/contact_us.md")
+                  div(class="card",
+                      div(class = "card-body",
+                          includeMarkdown("text/contact_us.md"),
+                          a(href = "mailto:floodcamml@gmail.com", class = "pretty-link", "floodcamml@gmail.com")
+                      )
                   )
-                ))
+                )
         )
       ),
+      
+      # Content at end of page that has copyright and link to CamML
       div(class = "footer-div-body",
-          span(style="text-align:center;",p(paste0("Copyright © ",format(Sys.Date(), "%Y")," ",project_info %>% filter(variable == "organization") %>% pull(value),". Built with"), style= "color:black;display:inline;"),a("CamML", href = "https://floodcamml.github.io", style="color:#007eff;"))
+          style = "text-align:center;",
+          span(style="text-align:center;",p(paste0("Copyright © ",format(Sys.Date(), "%Y")," ",project_info %>% filter(variable == "organization") %>% pull(value),". Built with"), style= "display:inline;"),a("CamML", href = "https://floodcamml.github.io", class="pretty-link"))
       )
-    )))
+    )
+  )
+)
 
 
-
-
-
-
-
-
-
-####_______________________________####
 ####  Server  ####
 
 # Define server logic required to draw a histogram
@@ -456,26 +336,37 @@ server <- function(input, output, session) {
              showConfirmButton = T,
              confirmButtonText = "OK",
              animation=F,
-             size = "s",
-             inputId = "splash_page", 
+             inputId = "splash_page",
              closeOnEsc = T)
   
-  #---------------- badges render --------------------
+  #---------------- Render label badges for directions box --------------------
   output$badges <- renderUI({
     req(badges_info)
     
     badge_pieces <- c()
     
     for(i in 1:nrow(badges_info)){
-      badge_pieces[[i]] <- tippy::tippy(shiny::span(class="badge",badges_info$value[i],style=paste0("background-color:",badges_info$color[i],";")),shiny::h5(badges_info$description[i]))
+      badge_pieces[[i]] <- tippy::tippy(shiny::span(class="badge",badges_info$value[i],style=paste0("background-color:",badges_info$color[i],";","color:white;margin-left:0px;")),shiny::p(badges_info$description[i]))
     }
     
-    h4(badge_pieces)
+    p(badge_pieces, style = "font-size:1.25rem;")
   })
   
   #---------------- description render ---------------
   output$description <- renderUI({
-    HTML(project_info %>% filter(variable == "description") %>% pull(value)) 
+    includeMarkdown("./text/description.md")
+  })
+  
+  observeEvent(input$is_mobile_device, ignoreNULL = T, {
+    output$site_info <- renderUI({
+      box(width=12,
+          id = "site_info_box",
+          title= "Site Info",
+          icon = icon("info-circle"),
+          collapsible = T,
+          collapsed = input$is_mobile_device,
+          includeMarkdown("./text/site_info.md"))
+    })
   })
   
   #---------------- picture panel render ---------------
@@ -517,30 +408,22 @@ server <- function(input, output, session) {
     
   })
   
-  observeEvent(input$nav,
-               {
-                 req(input$is_mobile_device == T)
-                 # for desktop browsers
-                 addClass(selector = "body", class = "sidebar-collapse")
-                 # for mobile browsers
-                 removeClass(selector = "body", class = "sidebar-open")
-               })
+  
+  # Make sidebar disappear if viewing on mobile and menu item is clicked
+  observeEvent(input$nav,{
+    req(input$is_mobile_device == T)
+    addClass(selector = "body", class = "sidebar-collapse")
+    removeClass(selector = "body", class = "sidebar-open")
+  })
   
   #-------------- Reactive Value Holders -------------
-  # These capture user inputs for later
   
-  # feedback on model 1
-  button_info_model1 <- reactiveValues()
+  # Create a reactive values object to hold label button values
+  button_info <- reactiveValues()
   
   
-  ####____________________________####
-  ####__  Supervised Model Displays __####
-  
-  #--------------- Get Cam Images ----------------------
-  
-
   # Get Traffic Cam Images
-
+  
   walk(.x = camera_info$camera_name, .f = function(.x){
     time_reactive_list[[paste0(tolower(.x),"_time_reactive")]] <- get_cam(.x)
   })
@@ -597,57 +480,49 @@ server <- function(input, output, session) {
     button_clear <- str_c(name_lcase, "_clear", id_suffix)
     
     camera_button_ui <- renderUI({
-      div(width="100%",
-          style="background-color: #ffffff;
-            padding: 10px;
-            border-radius: 10px;
-            margin: 10px 0px;",
-          align  = "center",
-          div(style="display:inline-block",
-              h2(gsub("([a-z])([A-Z])", "\\1 \\2", cam_name))),
-          div(style="display:inline-block",
-              
-              # Edit Badges above pictures created using model output
-              span(class="badge",badges_info %>% 
-                     filter(value == model_prediction_class) %>% 
-                     pull(value),
-                   style=paste0("background-color:",badges_info %>% 
-                                  filter(value == model_prediction_class) %>% 
-                                  pull(color),";position: relative; bottom: 5px; color:white;"))
-
-          ),
-          
-          # Display Cam Image
-          imageOutput(img_output_id,
-                      height="100%"),
-          
-          # Datetime for image
-          p(paste0("ML probability of ", model_prediction_class,": ", model_prediction_val,"%")),
-          p(paste0("Time: ", lst_time," ", tzone_alias)),
-          
-          # Inline boxes for user feedback
-          div(style="display:inline-block",
-              
-              # Edit choiceNames and choiceValues for buttons under pictures for labelling
-              shinyWidgets::radioGroupButtons(inputId = radio_button_id,
-                                              choiceNames = button_classes,
-                                              choiceValues = button_classes,
-                                              direction = "horizontal",
-                                              width = '100%' ,
-                                              individual = F,
-                                              selected = character(0)
+      div(class = "col-sm-12", style="padding:0px;",
+          div(class="card",
+              div(class = "card-header", style="font-size: 1.25rem; display: flex; flex-direction: row; align-items: center; justify-content: flex-start; align-content: center; flex-wrap: nowrap;",
+                  gsub("([a-z])([A-Z])", "\\1 \\2", cam_name),
+                  span(class="badge",badges_info %>% 
+                         filter(value == model_prediction_class) %>% 
+                         pull(value),
+                       style=paste0("background-color:",badges_info %>% 
+                                      filter(value == model_prediction_class) %>% 
+                                      pull(color),";color:white;"))
+              ),
+              div(class="card-body",
+                  div(style="text-align:center;",
+                      
+                      # Display Cam Image
+                      imageOutput(img_output_id,
+                                  height="100%"),
+                      
+                      # Datetime for image
+                      p(paste0("ML probability of ", model_prediction_class,": ", model_prediction_val,"%")),
+                      p(paste0("Time: ", lst_time," ", tzone_alias)),
+                      
+                      # Image label buttons
+                      div(style="display:inline-block; text-align:center;",
+                          shinyWidgets::radioGroupButtons(inputId = radio_button_id,
+                                                          choiceNames = button_classes,
+                                                          choiceValues = button_classes,
+                                                          label=NULL,
+                                                          selected = character(0))
+                      ),
+                      
+                      # Clear selection button
+                      div(style="display:inline-block",
+                          actionButton(inputId = button_clear,
+                                       label = "Clear",
+                                       status = "secondary",
+                                       style="width:75px;"
+                          )
+                      )
+                  )
               )
-          ),
-          
-          # clear selection button
-          div(style="display:inline-block",
-              actionButton(inputId = button_clear,
-                           label = "Clear",
-                           class = "btn btn-primary",
-                           style = "font-size:10pt;color:white")
           )
       )
-      
     })
     
     #return the UI
@@ -655,7 +530,7 @@ server <- function(input, output, session) {
   }
   
   render_camera_ui_no_model <- function(cam_name, cam_time, tzone = project_info %>% filter(variable == "tzone") %>% pull(value), tzone_alias = project_info %>% filter(variable == "tzone_alias") %>% pull(value),id_suffix = ""){
-
+    
     cam_time_val <- cam_time
     lst_time <- format(cam_time_val %>% lubridate::with_tz(tzone), "%m/%d/%Y %H:%M")
     
@@ -667,45 +542,43 @@ server <- function(input, output, session) {
     button_clear <- str_c(name_lcase, "_clear", id_suffix)
     
     camera_button_ui <- renderUI({
-      div(width="100%",
-          style="background-color: #ffffff;
-            padding: 10px;
-            border-radius: 10px;
-            margin: 10px 0px;",
-          align  = "center",
-          div(style="display:inline-block",
-              h2(gsub("([a-z])([A-Z])", "\\1 \\2", cam_name))),
-
-          # Display Cam Image
-          imageOutput(img_output_id,
-                      height="100%"),
-          
-          # Datetime for image
-          p(paste0("Time: ", lst_time," ", tzone_alias)),
-          
-          # Inline boxes for user feedback
-          div(style="display:inline-block",
-              
-              # Edit choiceNames and choiceValues for buttons under pictures for labelling
-              shinyWidgets::radioGroupButtons(inputId = radio_button_id,
-                                              choiceNames = button_classes,
-                                              choiceValues = button_classes,
-                                              direction = "horizontal",
-                                              width = '100%' ,
-                                              individual = F,
-                                              selected = character(0)
+      
+      div(class = "col-sm-12", style="padding:0px;",
+          div(class="card",
+              div(class = "card-header", style="font-size: 1.25rem; display: flex; flex-direction: row; align-items: center; justify-content: flex-start; align-content: center; flex-wrap: nowrap;",
+                  gsub("([a-z])([A-Z])", "\\1 \\2", cam_name)
+              ),
+              div(class="card-body",
+                  div(style="text-align:center;",
+                      
+                      # Display Cam Image
+                      imageOutput(img_output_id,
+                                  height="100%"),
+                      # Datetime for image
+                      p(paste0("Time: ", lst_time," ", tzone_alias)),
+                      
+                      # Image label buttons
+                      div(style="display:inline-block; ",
+                          
+                          shinyWidgets::radioGroupButtons(inputId = radio_button_id,
+                                                          choiceNames = button_classes,
+                                                          choiceValues = button_classes,
+                                                          label=NULL,
+                                                          selected = character(0))
+                      ),
+                      
+                      # Clear selection button
+                      div(style="display:inline-block",
+                          actionButton(inputId = button_clear,
+                                       label = "Clear",
+                                       status = "secondary",
+                                       style= "width:75px;"
+                          )
+                      )
+                  )
               )
-          ),
-          
-          # clear selection button
-          div(style="display:inline-block",
-              actionButton(inputId = button_clear,
-                           label = "Clear",
-                           class = "btn btn-primary",
-                           style = "font-size:10pt;color:white")
           )
       )
-      
     })
     
     #return the UI
@@ -735,7 +608,6 @@ server <- function(input, output, session) {
     })
   }
   
-  
   ####____________________________####
   ####__  User Data Collection  __####
   
@@ -751,7 +623,7 @@ server <- function(input, output, session) {
                               inputId = paste0(tolower(.x),"_button_select"),
                               choiceNames  = button_classes, 
                               choiceValues = button_classes, 
-                              selected = character(0) 
+                              selected = character(0)
       )
     })
   })
@@ -760,12 +632,12 @@ server <- function(input, output, session) {
   ###########  Reactive Button Info #######################
   walk(.x = camera_info$camera_name, .f = function(.x){
     observeEvent(c(input[[paste0(tolower(.x),"_button_select")]], input[[paste0(tolower(.x),"_clear")]]),{
-      button_info_model1[[paste0(tolower(.x),"_button_info")]] <- input[[paste0(tolower(.x),"_button_select")]]
+      button_info[[paste0(tolower(.x),"_button_info")]] <- input[[paste0(tolower(.x),"_button_select")]]
     })
   })
   
   
-#------------------- Submit button for model 1 -------------------
+  #------------------- Submit button for model 1 -------------------
   
   # 1. Observe the user submission
   observeEvent(input$submit,{
@@ -851,7 +723,7 @@ server <- function(input, output, session) {
               cam_name = .x,
               cam_time = time_reactive_list[[paste0(tolower(.x), "_time_reactive")]],
               model_prediction = predict_reactive_list[[paste0(tolower(.x), "_predict_reactive")]],
-              button_response = button_info_model1[[paste0(tolower(.x), "_button_info")]]
+              button_response = button_info[[paste0(tolower(.x), "_button_info")]]
             )
           
         }
@@ -866,7 +738,7 @@ server <- function(input, output, session) {
             store_cam_data_no_model(
               cam_name = .x,
               cam_time = time_reactive_list[[paste0(tolower(.x), "_time_reactive")]],
-              button_response = button_info_model1[[paste0(tolower(.x), "_button_info")]]
+              button_response = button_info[[paste0(tolower(.x), "_button_info")]]
             )
           
         }
